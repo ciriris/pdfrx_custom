@@ -1478,6 +1478,7 @@ class InteractiveViewerState extends State<InteractiveViewer> with TickerProvide
   }
 
   void _handleTransformation() {
+    _currentRotation = math.atan2(_transformer.value.storage[1], _transformer.value.storage[0]);
     // A change to the TransformationController's value is a change to the
     // state.
     setState(() {});
