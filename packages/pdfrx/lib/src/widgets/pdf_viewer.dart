@@ -749,11 +749,56 @@ class _PdfViewerState extends State<PdfViewer>
     if (widget.params.scrollPhysics == null) {
       _adjustBoundaryMargins(_viewSize!, candidate.zoom, anchor: anchor);
     }
+    if (candidate.storage[1].abs() > 0.000001 || candidate.storage[4].abs() > 0.000001) {
+      return _clampRotatedMatrix(candidate, viewSize);
+    }
     final overScroll = _calcOverscroll(candidate, viewSize: viewSize);
     if (overScroll == Offset.zero) {
       return candidate;
     }
     return candidate.clone()..translateByDouble(-overScroll.dx, -overScroll.dy, 0, 1);
+  }
+
+  Matrix4 _clampRotatedMatrix(Matrix4 candidate, Size viewSize) {
+    final margin = _adjustedBoundaryMargins;
+    if (margin.containsInfinite) return candidate;
+    final documentRect = Rect.fromLTRB(
+      -margin.left,
+      -margin.top,
+      _layout!.documentSize.width + margin.right,
+      _layout!.documentSize.height + margin.bottom,
+    );
+    final points = <Offset>[
+      candidate.transformOffset(documentRect.topLeft),
+      candidate.transformOffset(documentRect.topRight),
+      candidate.transformOffset(documentRect.bottomLeft),
+      candidate.transformOffset(documentRect.bottomRight),
+    ];
+    final bounds = Rect.fromLTRB(
+      points.map((point) => point.dx).reduce(min),
+      points.map((point) => point.dy).reduce(min),
+      points.map((point) => point.dx).reduce(max),
+      points.map((point) => point.dy).reduce(max),
+    );
+    final dx = bounds.width <= viewSize.width
+        ? viewSize.width / 2 - bounds.center.dx
+        : bounds.left > 0
+        ? -bounds.left
+        : bounds.right < viewSize.width
+        ? viewSize.width - bounds.right
+        : 0.0;
+    final dy = bounds.height <= viewSize.height
+        ? viewSize.height / 2 - bounds.center.dy
+        : bounds.top > 0
+        ? -bounds.top
+        : bounds.bottom < viewSize.height
+        ? viewSize.height - bounds.bottom
+        : 0.0;
+    if (dx == 0 && dy == 0) return candidate;
+    final corrected = candidate.clone();
+    corrected.storage[12] += dx;
+    corrected.storage[13] += dy;
+    return corrected;
   }
 
   void _updateLayout(Size viewSize) {
@@ -1929,15 +1974,18 @@ class _PdfViewerState extends State<PdfViewer>
   Matrix4 _calcMatrixFor(Offset position, {required double zoom, required Size viewSize}) {
     final hw = viewSize.width / 2;
     final hh = viewSize.height / 2;
-    return Matrix4.compose(
-      vec.Vector3(-position.dx * zoom + hw, -position.dy * zoom + hh, 0),
-      vec.Quaternion.identity(),
-      vec.Vector3(
-        zoom,
-        zoom,
-        zoom, // setting zoom of 1 on z caused a call to Matrix4.getMaxScaleOnAxis() to return 1 even when x and y are < 1
-      ),
-    );
+    final current = _txController.value;
+    final currentZoom = current.zoom;
+    final scale = currentZoom == 0 ? 1.0 : zoom / currentZoom;
+    final matrix = current.clone();
+    matrix.storage[0] *= scale;
+    matrix.storage[1] *= scale;
+    matrix.storage[4] *= scale;
+    matrix.storage[5] *= scale;
+    matrix.storage[10] = zoom;
+    matrix.storage[12] = hw - matrix.storage[0] * position.dx - matrix.storage[4] * position.dy;
+    matrix.storage[13] = hh - matrix.storage[1] * position.dx - matrix.storage[5] * position.dy;
+    return matrix;
   }
 
   Matrix4 _calcMatrixForRect(Rect rect, {double? zoomMax, double? margin}) {
@@ -2332,15 +2380,12 @@ class _PdfViewerState extends State<PdfViewer>
 
   /// Converts the local position in the widget to the local position in the PDF document structure.
   Offset _localToDocument(Offset local) {
-    final ratio = 1 / _currentZoom;
-    return local.translate(-_txController.value.xZoomed, -_txController.value.yZoomed).scale(ratio, ratio);
+    return Matrix4.inverted(_txController.value).transformOffset(local);
   }
 
   /// Converts the local position in the PDF document structure to the local position in the widget.
   Offset _documentToLocal(Offset document) {
-    return document
-        .scale(_currentZoom, _currentZoom)
-        .translate(_txController.value.xZoomed, _txController.value.yZoomed);
+    return _txController.value.transformOffset(document);
   }
 
   FocusNode? _getFocusNode() {
@@ -4814,7 +4859,7 @@ class PdfPageFitInfo {
 
 extension PdfMatrix4Ext on Matrix4 {
   /// Zoom ratio of the matrix.
-  double get zoom => storage[0];
+  double get zoom => sqrt(storage[0] * storage[0] + storage[1] * storage[1]);
 
   /// X position of the matrix.
   double get xZoomed => storage[12];
@@ -4840,18 +4885,26 @@ extension PdfMatrix4Ext on Matrix4 {
   ///
   /// Because [Matrix4] does not have the information of the view size,
   /// this function calculates the position based on the specified view size.
-  Offset calcPosition(Size viewSize) => Offset((viewSize.width / 2 - xZoomed), (viewSize.height / 2 - yZoomed)) / zoom;
+  Offset calcPosition(Size viewSize) => Matrix4.inverted(this).transformOffset(viewSize.center(Offset.zero));
 
   /// Calculate the visible rectangle based on the specified view size.
   ///
   /// [margin] adds extra margin to the area.
   /// Because [Matrix4] does not have the information of the view size,
   /// this function calculates the visible rectangle based on the specified view size.
-  Rect calcVisibleRect(Size viewSize, {double margin = 0}) => Rect.fromCenter(
-    center: calcPosition(viewSize),
-    width: (viewSize.width - margin * 2) / zoom,
-    height: (viewSize.height - margin * 2) / zoom,
-  );
+  Rect calcVisibleRect(Size viewSize, {double margin = 0}) {
+    final inverse = Matrix4.inverted(this);
+    final topLeft = inverse.transformOffset(Offset(margin, margin));
+    final topRight = inverse.transformOffset(Offset(viewSize.width - margin, margin));
+    final bottomLeft = inverse.transformOffset(Offset(margin, viewSize.height - margin));
+    final bottomRight = inverse.transformOffset(Offset(viewSize.width - margin, viewSize.height - margin));
+    return Rect.fromLTRB(
+      min(min(topLeft.dx, topRight.dx), min(bottomLeft.dx, bottomRight.dx)),
+      min(min(topLeft.dy, topRight.dy), min(bottomLeft.dy, bottomRight.dy)),
+      max(max(topLeft.dx, topRight.dx), max(bottomLeft.dx, bottomRight.dx)),
+      max(max(topLeft.dy, topRight.dy), max(bottomLeft.dy, bottomRight.dy)),
+    );
+  }
 
   Offset transformOffset(Offset xy) {
     final x = xy.dx;
