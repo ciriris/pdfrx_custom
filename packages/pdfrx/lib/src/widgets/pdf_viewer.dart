@@ -259,6 +259,7 @@ class _PdfViewerState extends State<PdfViewer>
 
   final _imageCache = _PdfPageImageCache();
   final _magnifierImageCache = _PdfPageImageCache();
+  int _activeRenderingCount = 0;
 
   late final _canvasLinkPainter = _CanvasLinkPainter(this);
 
@@ -490,6 +491,10 @@ class _PdfViewerState extends State<PdfViewer>
     _interactionEndedTimer?.cancel();
     _imageCache.cancelAllPendingRenderings();
     _magnifierImageCache.cancelAllPendingRenderings();
+    if (_activeRenderingCount > 0) {
+      _activeRenderingCount = 0;
+      widget.params.onRenderingChanged?.call(false);
+    }
     _animController.dispose();
     widget.documentRef.resolveListenable().removeListener(_onDocumentChanged);
     _imageCache.releaseAllImages();
@@ -1748,6 +1753,21 @@ class _PdfViewerState extends State<PdfViewer>
 
   void _invalidate() => _updateStream.add(_txController.value);
 
+  void _beginRendering() {
+    _activeRenderingCount += 1;
+    if (_activeRenderingCount == 1) {
+      widget.params.onRenderingChanged?.call(true);
+    }
+  }
+
+  void _endRendering() {
+    if (_activeRenderingCount == 0) return;
+    _activeRenderingCount -= 1;
+    if (_activeRenderingCount == 0) {
+      widget.params.onRenderingChanged?.call(false);
+    }
+  }
+
   Future<void> _requestPagePreviewImageCached(_PdfPageImageCache cache, PdfPage page, double scale) async {
     final width = page.width * scale;
     final height = page.height * scale;
@@ -1785,6 +1805,7 @@ class _PdfViewerState extends State<PdfViewer>
       final prev = cache.pageImages[page.pageNumber];
       if (prev != null && !prev.isDirty && prev.scale == scale) return;
       PdfImage? img;
+      _beginRendering();
       try {
         img = await page.render(
           fullWidth: width,
@@ -1804,6 +1825,7 @@ class _PdfViewerState extends State<PdfViewer>
         return; // ignore error
       } finally {
         img?.dispose();
+        _endRendering();
       }
     });
   }
@@ -1868,6 +1890,7 @@ class _PdfViewerState extends State<PdfViewer>
     if (widget.params.limitRenderingCache) flags |= PdfPageRenderFlags.limitedImageCache;
 
     PdfImage? img;
+    _beginRendering();
     try {
       img = await page.render(
         x: x,
@@ -1887,6 +1910,7 @@ class _PdfViewerState extends State<PdfViewer>
       return null; // ignore error
     } finally {
       img?.dispose();
+      _endRendering();
     }
   }
 

@@ -69,6 +69,7 @@ class PdfViewerParams {
     this.onViewerReady,
     this.onViewSizeChanged,
     this.onPageChanged,
+    this.onRenderingChanged,
     this.getPageRenderingScale,
     this.scrollByMouseWheel = 0.2,
     this.scaleByPointerScale = 1.0,
@@ -384,6 +385,12 @@ class PdfViewerParams {
 
   /// Function called when the current page is changed.
   final PdfPageChangedCallback? onPageChanged;
+
+  /// Function called when visible page image rendering starts or finishes.
+  ///
+  /// The callback receives true while one or more page image rendering tasks
+  /// are active and false after all active tasks finish or are cancelled.
+  final PdfViewerRenderingChangedCallback? onRenderingChanged;
 
   /// Function to customize the rendering scale of the page.
   ///
@@ -801,6 +808,7 @@ class PdfViewerParams {
         other.onViewerReady == onViewerReady &&
         other.onViewSizeChanged == onViewSizeChanged &&
         other.onPageChanged == onPageChanged &&
+        other.onRenderingChanged == onRenderingChanged &&
         other.getPageRenderingScale == getPageRenderingScale &&
         other.scrollByMouseWheel == scrollByMouseWheel &&
         other.scaleByPointerScale == scaleByPointerScale &&
@@ -872,6 +880,7 @@ class PdfViewerParams {
         onViewerReady.hashCode ^
         onViewSizeChanged.hashCode ^
         onPageChanged.hashCode ^
+        onRenderingChanged.hashCode ^
         getPageRenderingScale.hashCode ^
         scrollByMouseWheel.hashCode ^
         scaleByPointerScale.hashCode ^
@@ -1538,6 +1547,9 @@ typedef PdfViewerViewSizeChanged = void Function(Size viewSize, Size? oldViewSiz
 
 /// Function called when the current page is changed.
 typedef PdfPageChangedCallback = void Function(int? pageNumber);
+
+/// Function called when page image rendering starts or finishes.
+typedef PdfViewerRenderingChangedCallback = void Function(bool isRendering);
 
 /// Function to customize the rendering scale of the page.
 ///
